@@ -1,3 +1,5 @@
+const http = require("http");
+http.createServer((req, res) => res.end("ok")).listen(process.env.PORT || 3000);
 require('dotenv').config({ path: 'token.env' });
 const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
 
