@@ -1,0 +1,17 @@
+{
+  "name": "sunny-discord-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot that tells you when it's sunny using the Yr/MET Norway weather API",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "node --watch bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.0.0",
+    "dotenv": "^17.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
