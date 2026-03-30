@@ -31,6 +31,13 @@ const SUNNY_CODES = [
   "fair_polartwilight",
 ];
 
+// Partly sunny (no rain) symbol codes
+const PARTLY_SUNNY_CODES = [
+  "partlycloudy_day",
+  "partlycloudy_night",
+  "partlycloudy_polartwilight",
+];
+
 // Map symbol codes to emoji
 const SYMBOL_EMOJI = {
   clearsky_day: "☀️",
@@ -76,6 +83,103 @@ async function getWeather(lat, lon) {
 
 function isSunny(symbolCode) {
   return SUNNY_CODES.includes(symbolCode);
+}
+
+function isPartlySunny(symbolCode) {
+  return PARTLY_SUNNY_CODES.includes(symbolCode);
+}
+
+function hasRain(symbolCode) {
+  return /rain|sleet|snow|thunder|shower/.test(symbolCode || "");
+}
+
+// Classify a day given its timeseries entries (daytime hours only)
+function classifyDay(entries) {
+  const daytime = entries.filter((e) => {
+    const hour = new Date(e.time).getUTCHours();
+    return hour >= 6 && hour < 20;
+  });
+  const pool = daytime.length ? daytime : entries;
+
+  const symbols = pool.flatMap((e) => {
+    const s =
+      e.data?.next_1_hours?.summary?.symbol_code ||
+      e.data?.next_6_hours?.summary?.symbol_code;
+    return s ? [s] : [];
+  });
+
+  if (!symbols.length) return "unknown";
+  if (symbols.some(hasRain)) return "rain";
+
+  const sunny = symbols.filter(isSunny).length;
+  const partial = symbols.filter(isPartlySunny).length;
+
+  if (sunny / symbols.length >= 0.5) return "sunny";
+  if ((sunny + partial) / symbols.length >= 0.4) return "partlysunny";
+  return "cloudy";
+}
+
+function getDayTemps(entries) {
+  const temps = entries
+    .map((e) => e.data?.instant?.details?.air_temperature)
+    .filter((t) => t != null);
+  if (!temps.length) return null;
+  return { min: Math.min(...temps), max: Math.max(...temps) };
+}
+
+function buildOutlookEmbed(locationName, timeseries) {
+  const byDay = {};
+  for (const entry of timeseries) {
+    const date = entry.time.slice(0, 10);
+    if (!byDay[date]) byDay[date] = [];
+    byDay[date].push(entry);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const days = Object.keys(byDay)
+    .sort()
+    .filter((d) => d >= today)
+    .slice(0, 7);
+
+  const COND = {
+    sunny:       { icon: "☀️",  label: "Sunny" },
+    partlysunny: { icon: "🌤️", label: "Partly Sunny" },
+    cloudy:      { icon: "☁️",  label: "Cloudy" },
+    rain:        { icon: "🌧️", label: "Rain" },
+    unknown:     { icon: "❓",  label: "Unknown" },
+  };
+
+  const lines = days.map((date) => {
+    const entries = byDay[date];
+    const condition = classifyDay(entries);
+    const temps = getDayTemps(entries);
+    const d = new Date(date + "T12:00:00Z");
+    const dayStr = d.toLocaleDateString("en-GB", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+    });
+    const tempStr = temps
+      ? `${Math.round(temps.min)}–${Math.round(temps.max)}°C`
+      : "N/A";
+    const { icon, label } = COND[condition];
+    const isGood = condition === "sunny" || condition === "partlysunny";
+    return `${icon} **${dayStr}** — ${label}${isGood ? "" : ""} · ${tempStr}`;
+  });
+
+  const goodDays = days.filter((d) => {
+    const c = classifyDay(byDay[d]);
+    return c === "sunny" || c === "partlysunny";
+  }).length;
+
+  return new EmbedBuilder()
+    .setColor(goodDays > 0 ? 0xffd700 : 0x5b8dee)
+    .setTitle(`📅 7-Day Sunny Outlook — ${locationName}`)
+    .setDescription(
+      `☀️ Sunny and 🌤️ Partly Sunny days have no rain.\n\n${lines.join("\n")}`
+    )
+    .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
+    .setTimestamp();
 }
 
 function formatTemperature(temp) {
@@ -298,8 +402,37 @@ client.on("messageCreate", async (message) => {
     }, 24 * 60 * 60 * 1000);
   }
 
+  // !sunnydays <city> — 7-day outlook table
+  if (content.startsWith("!sunnydays")) {
+    const args = content.slice("!sunnydays".length).trim();
+    if (!args) {
+      return message.reply(
+        "**Usage:** `!sunnydays <city>` — shows a 7-day sunny outlook.\n**Available cities:** " +
+          Object.keys(LOCATIONS).join(", ")
+      );
+    }
+
+    const key = args.toLowerCase().replace(/\s+/g, "_");
+    const loc = LOCATIONS[key];
+    if (!loc) {
+      return message.reply(
+        `Unknown city **${args}**. Available: ${Object.keys(LOCATIONS).join(", ")}`
+      );
+    }
+
+    try {
+      await message.channel.sendTyping();
+      const data = await getWeather(loc.lat, loc.lon);
+      const embed = buildOutlookEmbed(loc.name, data.properties.timeseries);
+      await message.reply({ embeds: [embed] });
+    } catch (err) {
+      console.error(err);
+      message.reply("⚠️ Could not fetch forecast data. Please try again.");
+    }
+  }
+
   // !help
-  if (content === "!help" || content === "!sunnyhelp") {
+  if (content === "!help" || content === "!sunnyhelp" || content === "!commands") {
     const embed = new EmbedBuilder()
       .setColor(0xffd700)
       .setTitle("☀️ SunnyBot Commands")
@@ -313,6 +446,11 @@ client.on("messageCreate", async (message) => {
           name: "`!sunny lat=<lat> lon=<lon>`",
           value:
             "Check weather at custom coordinates.\nExample: `!sunny lat=59.91 lon=10.75`",
+        },
+        {
+          name: "`!sunnydays <city>`",
+          value:
+            "7-day outlook table showing sunny ☀️ and partly sunny 🌤️ days (no rain).\nExample: `!sunnydays oslo`",
         },
         {
           name: "`!sunwatch <city>`",
