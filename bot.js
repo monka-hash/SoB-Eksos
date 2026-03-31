@@ -1,19 +1,6 @@
 const http = require("http");
 http.createServer((req, res) => res.end("ok")).listen(process.env.PORT || 3000);
 
-// Keep-alive ping to prevent Render from spinning down after inactivity
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
-if (RENDER_URL) {
-  console.log(`🏓 Keep-alive ping active → ${RENDER_URL} every 30s`);
-  setInterval(() => {
-    fetch(RENDER_URL)
-      .then(() => console.log(`🏓 Pinged ${RENDER_URL}`))
-      .catch((err) => console.error("Keep-alive ping failed:", err));
-  }, 30_000);
-} else {
-  console.warn("⚠️  RENDER_EXTERNAL_URL is not set — keep-alive ping is disabled.");
-}
-
 require('dotenv').config({ path: 'token.env' });
 const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
 
