@@ -6,9 +6,6 @@ const {
   Client,
   GatewayIntentBits,
   EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
 } = require("discord.js");
 
 const client = new Client({
@@ -20,44 +17,7 @@ const client = new Client({
   ],
 });
 
-const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID; // optional — set in env to auto-assign a role on accept
-
-const RULES_EMBED = new EmbedBuilder()
-  .setColor(0xffd700)
-  .setTitle("🏍️ Velkommen til Sons of Bitches")
-  .setDescription(
-    "Nei, vi er ikke en MC-klubb. Nei, vi er ikke tøffe. Vi er bare en gjeng kompiser som liker å kjøre motorsykkel og trengte et sted å planlegge turer, dele info og snakke dritt.\n\n" +
-    "Navnet? Vi måtte kalle discorden noe. Ikke les for mye inn i det."
-  )
-  .addFields(
-    {
-      name: "Hva er dette?",
-      value:
-        "Et chill sted for folk som vil ha noen å kjøre med. Vi deler turinformasjon, hjelper hverandre med førerkortprosessen, diskuterer utstyr, og avtaler kjøreturer. That's it.",
-    },
-    {
-      name: "📋 Regler",
-      value: "Ikke vær en idiot.\nSe regel 1.",
-    },
-    {
-      name: "🤝 Invitere folk?",
-      value:
-        "Kjør på. Har du en kompis som også vil kjøre MC — send invitasjonslenke. Jo flere, jo bedre turer.\n\n**Eneste krav:** Du må være fylt 24 år. (og ikke være idiot)",
-    },
-    {
-      name: "📝 Nickname-krav",
-      value:
-        "Endre server-nicknamen din til å starte med **[SoB]** — f.eks. `[SoB] Navn`.\nBoten setter dette automatisk, men du kan endre det selv så lenge **[SoB]** er med.",
-    }
-  )
-  .setFooter({ text: "Trykk på knappen under for å godta reglene og få tilgang. 🤙" });
-
-const RULES_ROW = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("sob_accept_rules")
-    .setLabel("✅ Godta regler")
-    .setStyle(ButtonStyle.Success)
-);
+const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID; // optional — set in env to auto-assign a role on join
 
 const YR_USER_AGENT = "SunnyBot/1.0 m.thomsen96@outlook.com";
 
@@ -646,27 +606,9 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ── Onboarding: post rules when a new member joins ────────────────────────────
+// ── Onboarding: set [SoB] nickname and assign role when a new member joins ────
 
 client.on("guildMemberAdd", async (member) => {
-  const channel = member.guild.channels.cache.find(
-    (c) => c.name === "velkommen" && c.isTextBased()
-  );
-  if (!channel) return console.warn("⚠️ Could not find #velkommen channel.");
-  await channel.send({
-    content: `👋 Hei ${member}! Velkommen til Sons of Bitches. Les reglene under og trykk **Godta** for å få tilgang.`,
-    embeds: [RULES_EMBED],
-    components: [RULES_ROW],
-  });
-});
-
-// ── Button interaction: accept rules ─────────────────────────────────────────
-
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isButton() || interaction.customId !== "sob_accept_rules") return;
-
-  const member = interaction.member;
-
   // Assign member role if configured
   if (MEMBER_ROLE_ID) {
     try {
@@ -686,32 +628,14 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  await interaction.reply({
-    content:
-      "✅ Regler godtatt! Nicknamen din er oppdatert med **[SoB]**-prefiks. Du kan endre den selv — bare hold på **[SoB]** foran. Velkommen! 🤙",
-    ephemeral: true,
-  });
-});
-
-// ── Nickname enforcement: reset if [SoB] prefix is removed ───────────────────
-
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  const oldNick = oldMember.nickname || oldMember.user.username;
-  const newNick = newMember.nickname || newMember.user.username;
-
-  // Only act if they had [SoB] before and removed it
-  if (!oldNick.startsWith("[SoB]") || newNick.startsWith("[SoB]")) return;
-
-  try {
-    const base = newMember.nickname || newMember.user.username;
-    await newMember.setNickname(`[SoB] ${base}`);
-    await newMember.send(
-      "⚠️ Nicknamen din på Sons of Bitches må starte med **[SoB]**. Den er satt tilbake automatisk. Du kan endre resten av navnet fritt. 🤙"
-    ).catch(() => {}); // ignore if DMs are closed
-  } catch (e) {
-    console.error("Failed to restore [SoB] nickname:", e);
+  const channel = member.guild.channels.cache.find(
+    (c) => c.name === "velkommen" && c.isTextBased()
+  );
+  if (channel) {
+    await channel.send(`👋 Hei ${member}! Velkommen til Sons of Bitches. 🤙`);
   }
 });
+
 
 client.once("ready", () => {
   console.log(`✅ SunnyBot is online as ${client.user.tag}`);
