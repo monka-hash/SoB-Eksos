@@ -299,7 +299,10 @@ function buildSunnyEmbed(locationName, timeseries, sunTimes) {
     .setTimestamp();
 
   if (sunTimes) {
-    embed.addFields({ name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true });
+    embed.addFields(
+      { name: "🌅 Sunrise", value: formatUTCTime(sunTimes.sunrise), inline: true },
+      { name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true }
+    );
   }
 
   return embed;
@@ -313,12 +316,13 @@ function buildNotSunnyEmbed(locationName, timeseries, sunTimes) {
     "unknown";
   const temp = now.data?.instant?.details?.air_temperature;
 
+  // Only look for sunny periods during daytime hours (ignore clearsky_night etc.)
   let nextSunny = null;
   for (const entry of timeseries.slice(1, 48)) {
     const s =
       entry.data?.next_1_hours?.summary?.symbol_code ||
       entry.data?.next_6_hours?.summary?.symbol_code;
-    if (s && isSunny(s)) {
+    if (s && isSunny(s) && s.endsWith("_day")) {
       nextSunny = entry;
       break;
     }
@@ -334,7 +338,10 @@ function buildNotSunnyEmbed(locationName, timeseries, sunTimes) {
     .setTimestamp();
 
   if (sunTimes) {
-    embed.addFields({ name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true });
+    embed.addFields(
+      { name: "🌅 Sunrise", value: formatUTCTime(sunTimes.sunrise), inline: true },
+      { name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true }
+    );
   }
 
   if (nextSunny) {
@@ -350,7 +357,7 @@ function buildNotSunnyEmbed(locationName, timeseries, sunTimes) {
       nextSunny.data?.next_6_hours?.summary?.symbol_code;
     embed.addFields({
       name: "☀️ Next sunny period",
-      value: `${SYMBOL_EMOJI[nextSymbol] || "☀️"} ${timeStr}`,
+      value: `${SYMBOL_EMOJI[nextSymbol] || "☀️"} ${timeStr} UTC`,
     });
   } else {
     embed.addFields({
@@ -412,20 +419,8 @@ client.on("messageCreate", async (message) => {
         timeseries[0].data?.next_6_hours?.summary?.symbol_code ||
         "";
 
-      if (!isDaytime(sunTimes)) {
-        const embed = new EmbedBuilder()
-          .setColor(0x2c2f33)
-          .setTitle(`🌙 It's nighttime in ${locationName}`)
-          .setDescription(`The sun is not up right now in **${locationName}**. Check back when the sun rises!`)
-          .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
-          .setTimestamp();
-        if (sunTimes) {
-          embed.addFields({ name: "🌅 Sunrise", value: formatUTCTime(sunTimes.sunrise) });
-        }
-        return message.reply({ embeds: [embed] });
-      }
-
-      const embed = isSunny(symbol)
+      // Only show the sunny embed when it's actually daytime and the symbol is sunny
+      const embed = (isDaytime(sunTimes) && isSunny(symbol))
         ? buildSunnyEmbed(locationName, timeseries, sunTimes)
         : buildNotSunnyEmbed(locationName, timeseries, sunTimes);
 
