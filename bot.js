@@ -122,6 +122,33 @@ async function getWeather(lat, lon) {
   return res.json();
 }
 
+async function getSunTimes(lat, lon) {
+  const date = new Date().toISOString().slice(0, 10);
+  const url = `https://api.met.no/weatherapi/sunrise/3.0/sun?lat=${lat}&lon=${lon}&date=${date}&offset=+00:00`;
+  const res = await fetch(url, { headers: { "User-Agent": YR_USER_AGENT } });
+  if (!res.ok) throw new Error(`Sunrise API error: ${res.status}`);
+  const data = await res.json();
+  const sunriseTime = data.properties.sunrise?.time;
+  const sunsetTime = data.properties.sunset?.time;
+  if (!sunriseTime || !sunsetTime) return null; // polar night / midnight sun
+  return { sunrise: new Date(sunriseTime), sunset: new Date(sunsetTime) };
+}
+
+function isDaytime(sunTimes) {
+  if (!sunTimes) return true; // if unknown, allow through
+  const now = Date.now();
+  return now >= sunTimes.sunrise.getTime() && now <= sunTimes.sunset.getTime();
+}
+
+function formatUTCTime(date) {
+  return date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  }) + " UTC";
+}
+
 function isSunny(symbolCode) {
   return SUNNY_CODES.includes(symbolCode);
 }
@@ -248,7 +275,7 @@ function formatTemperature(temp) {
   return `${Math.round(temp)}°C`;
 }
 
-function buildSunnyEmbed(locationName, timeseries) {
+function buildSunnyEmbed(locationName, timeseries, sunTimes) {
   const now = timeseries[0];
   const symbol = now.data?.next_1_hours?.summary?.symbol_code || "unknown";
   const temp = now.data?.instant?.details?.air_temperature;
@@ -271,10 +298,14 @@ function buildSunnyEmbed(locationName, timeseries) {
     .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
     .setTimestamp();
 
+  if (sunTimes) {
+    embed.addFields({ name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true });
+  }
+
   return embed;
 }
 
-function buildNotSunnyEmbed(locationName, timeseries) {
+function buildNotSunnyEmbed(locationName, timeseries, sunTimes) {
   const now = timeseries[0];
   const symbol =
     now.data?.next_1_hours?.summary?.symbol_code ||
@@ -301,6 +332,10 @@ function buildNotSunnyEmbed(locationName, timeseries) {
     )
     .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
     .setTimestamp();
+
+  if (sunTimes) {
+    embed.addFields({ name: "🌇 Sunset", value: formatUTCTime(sunTimes.sunset), inline: true });
+  }
 
   if (nextSunny) {
     const date = new Date(nextSunny.time);
@@ -367,16 +402,32 @@ client.on("messageCreate", async (message) => {
 
     try {
       await message.channel.sendTyping();
-      const data = await getWeather(lat, lon);
+      const [data, sunTimes] = await Promise.all([
+        getWeather(lat, lon),
+        getSunTimes(lat, lon).catch(() => null),
+      ]);
       const timeseries = data.properties.timeseries;
       const symbol =
         timeseries[0].data?.next_1_hours?.summary?.symbol_code ||
         timeseries[0].data?.next_6_hours?.summary?.symbol_code ||
         "";
 
+      if (!isDaytime(sunTimes)) {
+        const embed = new EmbedBuilder()
+          .setColor(0x2c2f33)
+          .setTitle(`🌙 It's nighttime in ${locationName}`)
+          .setDescription(`The sun is not up right now in **${locationName}**. Check back when the sun rises!`)
+          .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
+          .setTimestamp();
+        if (sunTimes) {
+          embed.addFields({ name: "🌅 Sunrise", value: formatUTCTime(sunTimes.sunrise) });
+        }
+        return message.reply({ embeds: [embed] });
+      }
+
       const embed = isSunny(symbol)
-        ? buildSunnyEmbed(locationName, timeseries)
-        : buildNotSunnyEmbed(locationName, timeseries);
+        ? buildSunnyEmbed(locationName, timeseries, sunTimes)
+        : buildNotSunnyEmbed(locationName, timeseries, sunTimes);
 
       await message.reply({ embeds: [embed] });
     } catch (err) {
@@ -408,18 +459,36 @@ client.on("messageCreate", async (message) => {
     );
 
     let wasNotSunny = true;
+    let sunsetNotifiedDate = null;
     const interval = setInterval(async () => {
       try {
-        const data = await getWeather(loc.lat, loc.lon);
+        const [data, sunTimes] = await Promise.all([
+          getWeather(loc.lat, loc.lon),
+          getSunTimes(loc.lat, loc.lon).catch(() => null),
+        ]);
         const ts = data.properties.timeseries;
         const symbol =
           ts[0].data?.next_1_hours?.summary?.symbol_code ||
           ts[0].data?.next_6_hours?.summary?.symbol_code ||
           "";
 
+        // Send a one-time sunset notification when the sun goes down
+        if (sunTimes && !isDaytime(sunTimes) && Date.now() > sunTimes.sunset.getTime()) {
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (sunsetNotifiedDate !== todayStr) {
+            sunsetNotifiedDate = todayStr;
+            message.channel.send(
+              `🌇 The sun has set in **${loc.name}** (${formatUTCTime(sunTimes.sunset)}). Pausing sunny alerts until sunrise tomorrow.`
+            );
+          }
+        }
+
+        // Only alert when it's daytime
+        if (!isDaytime(sunTimes)) return;
+
         if (isSunny(symbol) && wasNotSunny) {
           wasNotSunny = false;
-          const embed = buildSunnyEmbed(loc.name, ts);
+          const embed = buildSunnyEmbed(loc.name, ts, sunTimes);
           message.channel.send({
             content: `${message.author} ☀️ It's now sunny in **${loc.name}**!`,
             embeds: [embed],
@@ -534,10 +603,31 @@ client.on("messageCreate", async (message) => {
 
     const timer = setInterval(async () => {
       try {
-        const data = await getWeather(loc.lat, loc.lon);
+        const [data, sunTimes] = await Promise.all([
+          getWeather(loc.lat, loc.lon),
+          getSunTimes(loc.lat, loc.lon).catch(() => null),
+        ]);
         const { condition, symbol, temp, wind } = getCurrentCondition(data.properties.timeseries);
         const entry = alerts.get(alertKey);
         if (!entry) return;
+
+        // Send a one-time sunset notification when the sun goes down
+        if (sunTimes && !isDaytime(sunTimes) && Date.now() > sunTimes.sunset.getTime()) {
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (entry.sunsetNotified !== todayStr) {
+            entry.sunsetNotified = todayStr;
+            const embed = new EmbedBuilder()
+              .setColor(0xff8c00)
+              .setTitle(`🌇 Sun is setting in ${loc.name}`)
+              .setDescription(`Pausing weather alerts until sunrise tomorrow at **${formatUTCTime(sunTimes.sunrise)}**.`)
+              .setFooter({ text: "Powered by Yr / MET Norway • yr.no" })
+              .setTimestamp();
+            message.channel.send({ embeds: [embed] });
+          }
+        }
+
+        // Only report condition changes during daytime
+        if (!isDaytime(sunTimes)) return;
 
         if (condition !== entry.lastCondition) {
           const prev = COND_DISPLAY[entry.lastCondition] ?? { icon: "❓", label: entry.lastCondition };
@@ -562,7 +652,7 @@ client.on("messageCreate", async (message) => {
       }
     }, intervalMs);
 
-    alerts.set(alertKey, { loc, intervalMin: effectiveMin, lastCondition, timer });
+    alerts.set(alertKey, { loc, intervalMin: effectiveMin, lastCondition, sunsetNotified: null, timer });
     const { icon, label } = COND_DISPLAY[lastCondition] ?? { icon: "❓", label: lastCondition };
     message.reply(
       `🔔 Weather alerts set for **${loc.name}** — checking every **${effectiveMin} min**.\nCurrent condition: ${icon} ${label}\nUse \`!alert stop ${cityArg}\` to cancel.`
